@@ -33,6 +33,7 @@ final class AppModel: ObservableObject {
     private let camera = Camera()
     private var hint20Px: SIMD2<Double>?
     private var lastFrame: RGBImage?
+    private var launchAutoAt: Date?
     private var lastPreviewAt = Date.distantPast
     // カメラのキューから触るもの
     nonisolated(unsafe) private var detector: Detector?
@@ -65,6 +66,12 @@ final class AppModel: ObservableObject {
         let s0 = sessionStart
         Task { @MainActor in
             self.lastFrame = img
+            // 起動して3秒たったら1回だけ自動キャリブレーション(画面に触らずに済むように)
+            if self.launchAutoAt == nil { self.launchAutoAt = Date().addingTimeInterval(3) }
+            if let t = self.launchAutoAt, Date() > t, self.mode == .live {
+                self.launchAutoAt = .distantFuture
+                self.autoCalibrate()
+            }
             if Date().timeIntervalSince(self.lastPreviewAt) > 1.0 / 15 {
                 self.imgW = img.w
                 self.imgH = img.h
@@ -161,6 +168,11 @@ final class AppModel: ObservableObject {
         if let hint20 { hint20Px = hint20 }
         let hint = hint20Px
         Task.detached(priority: .userInitiated) {
+            // あとで Mac で調べられるように、最後に試した1枚を残す(Documents/debug/autocal_last.jpg)
+            let dbg = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+                .appendingPathComponent("debug", isDirectory: true)
+            try? FileManager.default.createDirectory(at: dbg, withIntermediateDirectories: true)
+            try? f.jpeg(quality: 0.95)?.write(to: dbg.appendingPathComponent("autocal_last.jpg"))
             let r = AutoCalib.calibrate(f, up: up, hint20Px: hint)
             await MainActor.run {
                 if var r, r.rmsPx < 3 {
