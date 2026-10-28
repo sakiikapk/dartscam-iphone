@@ -95,7 +95,7 @@ final class Detector {
         lastQuiet = img
         let (count, diff) = changed(before, img)
         if count < dartArea * 0.04 { return nil }  // 露出の揺れ、影だけ
-        if count > dartArea * 3 || lastActive - start > 2.0 || dartsOnBoard >= 3 {
+        if count > dartArea * 3 || lastActive - start > 2.0 || dartsOnBoard >= 6 {
             dartsOnBoard = 0
             return .reset
         }

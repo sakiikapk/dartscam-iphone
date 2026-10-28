@@ -322,10 +322,7 @@ final class AppModel: ObservableObject {
         case let .hit(t, tip, note, before, after):
             guard let c = cal else { return }
             let no = hits.count + 1
-            if inRound >= 3 {
-                round += 1
-                inRound = 0
-            }
+            // ラウンドは「ダーツを抜いた」で区切る。3本固定にしない(弾かれて落ちた本があっても続けられる)
             inRound += 1
             var mm: SIMD2<Double>? = nil
             if let tip { mm = c.toMM(tip) }
