@@ -26,6 +26,8 @@ final class Detector {
     let cal: Calibration
     /// 動きの区間ごとの判定ログ(CSV 1行)。なぜ拾った/見落としたかを後で追うため
     var onEvent: ((String) -> Void)?
+    /// 毎フレームの動きの量としきい値(見落としを追うため)
+    var onMotion: ((Double, Float, Float) -> Void)?
     static let eventHeader = "start_s,end_s,count_darts,blob_darts,concentration,aspect,align_deg,on_board,decision"
     private let roi: (x0: Int, y0: Int, w: Int, h: Int)
     private let roiMask: [Bool]
@@ -76,13 +78,16 @@ final class Detector {
         let small = coarseGray(img)
         defer { prevSmall = small }
         guard let prev = prevSmall else { lastQuiet = img; return nil }
-        var s: Float = 0
-        for i in 0..<small.count { s += Float(abs(small[i] - prev[i])) }
-        let motion = s / Float(max(1, small.count))
+        // 「平均がどれだけ変わったか」だと細いダーツ1本は盤全体のノイズに埋もれる。
+        // 「しっかり変わった点が何個あるか」で見る(ダーツ1本で 4px おきの点が数十個変わる)
+        var changedPts: Float = 0
+        for i in 0..<small.count where abs(small[i] - prev[i]) > 12 { changedPts += 1 }
+        let motion = changedPts
         recent.append(motion)
         if recent.count > 150 { recent.removeFirst() }
         guard recent.count >= 15 else { lastQuiet = img; return nil }
         let quiet = quietLevel()
+        onMotion?(t, motion, quiet)
 
         if motion > quiet {
             if eventStart == nil {
@@ -127,6 +132,12 @@ final class Detector {
             log("ignored_not_dart")
             return nil
         }
+        // 一番大きな塊が盤の外(ROIのふち)に触れていたら、外から入ってきた手。ダーツではない
+        if shape.touchesEdge {
+            log("reset_hand")
+            resetCount()
+            return .reset
+        }
         dartsOnBoard += 1
         let off = SIMD2<Double>(Double(roi.x0), Double(roi.y0))
         if let r = findTip(diff, off: off) {
@@ -143,17 +154,23 @@ final class Detector {
     /// 本物は変化が1つの塊にまとまる(塊/全体 0.47〜1.0)、影や人の接近は散らばる(0.08〜0.11)ので、まとまり具合で見る。
     /// 細長さと向きは events.csv に残すだけ
     private func dartShape(_ diff: [Float]) -> (isDart: Bool, blobDarts: Double, concentration: Double, aspect: Double,
-                                                alignDeg: Double) {
+                                                alignDeg: Double, touchesEdge: Bool) {
         let W = roi.w, Hh = roi.h
         let m = Morph.close(diff.map { $0 > 40 }, W, Hh, r: 2)
         let cc = Morph.components(m, W, Hh)
         guard let biggest = cc.stats.enumerated().max(by: { $0.element.area < $1.element.area }) else {
-            return (false, 0, 0, 0, 90)
+            return (false, 0, 0, 0, 90, false)
         }
         let (j, big) = (biggest.offset, biggest.element)
+        // 塊が ROI のふち(盤の外側)に触れている = 外から入ってきた手や体
+        var touchesEdge = false
+        for x in 0..<W where cc.labels[x] == j || cc.labels[(Hh - 1) * W + x] == j { touchesEdge = true; break }
+        if !touchesEdge {
+            for y in 0..<Hh where cc.labels[y * W] == j || cc.labels[y * W + W - 1] == j { touchesEdge = true; break }
+        }
         var pts: [SIMD2<Double>] = []
         for i in 0..<(W * Hh) where cc.labels[i] == j { pts.append([Double(i % W), Double(i / W)]) }
-        guard pts.count > 5 else { return (false, 0, 0, 0, 90) }
+        guard pts.count > 5 else { return (false, 0, 0, 0, 90, touchesEdge) }
         let (mu, ax) = Morph.fitLine(pts)
         let nrm = SIMD2<Double>(-ax.y, ax.x)
         var along = 0.0, perp = 0.0
@@ -169,7 +186,7 @@ final class Detector {
         let blobDarts = Double(big.area) / dartArea
         let concentration = Double(big.area) / Double(max(1, m.filter { $0 }.count))
         let isDart = blobDarts >= 0.05 && blobDarts <= 2.5 && concentration >= 0.3
-        return (isDart, blobDarts, concentration, aspect, alignDeg)
+        return (isDart, blobDarts, concentration, aspect, alignDeg, touchesEdge)
     }
 
     /// 刺さっていたダーツのどれかが、チップからフライト側へほぼ全部変わっていたら「抜いた」とみなす。
@@ -200,8 +217,8 @@ final class Detector {
         let med = s[s.count / 2]
         let dev = recent.map { abs($0 - med) }.sorted()
         let mad = dev[dev.count / 2]
-        // 着弾の小さな揺れも拾えるよう、ノイズの中央値+4MAD(board.py と同じ)
-        return max(1.0, med + 4 * mad)
+        // 着弾の小さな揺れも拾えるよう、ノイズの中央値+4MAD(board.py と同じ)。床は「6点」
+        return max(6.0, med + 4 * mad)
     }
 
     /// 盤面ROIを4画素おきに見たグレー

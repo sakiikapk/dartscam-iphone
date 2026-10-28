@@ -253,6 +253,7 @@ final class AppModel: ObservableObject {
         sessionStart = Date()
         detector = Detector(cal: c)
         detector?.onEvent = { [weak self] line in self?.logEvent(line) }
+        detector?.onMotion = { [weak self] t, m, q in self?.logMotion(t, m, q) }
         mode = .recording
         status = "記録中。投げてOK(ダーツを抜くと自動で区切る)"
         writeCSV()
@@ -304,6 +305,7 @@ final class AppModel: ObservableObject {
                 self.cal = r.cal
                 self.detector = Detector(cal: r.cal)
                 self.detector?.onEvent = { [weak self] line in self?.logEvent(line) }
+                self.detector?.onMotion = { [weak self] t, m, q in self?.logMotion(t, m, q) }
                 self.status = String(format: "カメラが %.0fpx ずれてたので合わせ直した", moved)
                 if let dir = self.sessionDir {
                     try? JSONEncoder().encode(r.cal).write(to: dir.appendingPathComponent("calibration.json"))
@@ -361,6 +363,27 @@ final class AppModel: ObservableObject {
             if let h = try? FileHandle(forWritingTo: url) {
                 h.seekToEndOfFile()
                 h.write((line + "\n").data(using: .utf8)!)
+                try? h.close()
+            }
+        }
+    }
+
+    /// 毎フレームの動きの量を motion.csv にまとめて書く(1秒分ずつ)
+    nonisolated(unsafe) private var motionBuf: [String] = []
+    nonisolated private func logMotion(_ t: Double, _ m: Float, _ q: Float) {
+        motionBuf.append(String(format: "%.3f,%.0f,%.1f", t, m, q))
+        guard motionBuf.count >= 30 else { return }
+        let chunk = motionBuf.joined(separator: "\n") + "\n"
+        motionBuf = []
+        Task { @MainActor in
+            guard let dir = self.sessionDir else { return }
+            let url = dir.appendingPathComponent("motion.csv")
+            if !FileManager.default.fileExists(atPath: url.path) {
+                try? "t_s,changed_pts,threshold\n".write(to: url, atomically: true, encoding: .utf8)
+            }
+            if let h = try? FileHandle(forWritingTo: url) {
+                h.seekToEndOfFile()
+                h.write(chunk.data(using: .utf8)!)
                 try? h.close()
             }
         }
