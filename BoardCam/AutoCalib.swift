@@ -30,7 +30,9 @@ enum AutoCalib {
     /// 20 のダブル/トリプルは赤。この偶奇のマスが赤
     static let redParity = order.firstIndex(of: 20)! % 2
 
-    static func calibrate(_ img: RGBImage) -> Result? {
+    /// up: 画面の上が画像のどっち向きか(横持ちなら (0,-1)、縦持ちなら (-1,0))。
+    /// hint20Px: 「20 はここ」とタップされた画像上の位置。あれば「20 が上」よりこっちを優先する
+    static func calibrate(_ img: RGBImage, up: SIMD2<Double> = [0, -1], hint20Px: SIMD2<Double>? = nil) -> Result? {
         var cells = pickBoardCells(findCells(img), img: img)
         guard cells.count >= 10, let bull = findBull(cells) else { return nil }
         labelRings(&cells, bull: bull)
@@ -57,11 +59,13 @@ enum AutoCalib {
             if Double(agree) / Double(ringIdx.count) < 0.8 { continue }
             let (src, dst) = boardPoints(cells, shift: k)
             guard let H = ransacHomography(src: src, dst: dst, thresholdPx: 6)?.H else { continue }
-            // 3) 「20 が上」: 盤面の +y が画像の上を向く候補ほど良い
+            // 3) 「20 が上」: 盤面の +y が画面の上(up)を向く候補ほど良い。20 の位置をタップしてもらったらそっち
             let inv = H.inverse
             let p0 = Mat.apply(inv, [0, 0]), p1 = Mat.apply(inv, [0, 100])
-            let up = abs(atan2(p1.x - p0.x, -(p1.y - p0.y)) * 180 / .pi)
-            cands.append((up, k, H))
+            let v = simd_normalize(p1 - p0)
+            let ref = hint20Px.map { simd_normalize($0 - p0) } ?? simd_normalize(up)
+            let ang = acos(max(-1, min(1, simd_dot(v, ref)))) * 180 / .pi
+            cands.append((ang, k, H))
         }
         guard !cands.isEmpty else { return nil }
         cands.sort { $0.up < $1.up }

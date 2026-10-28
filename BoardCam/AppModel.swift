@@ -29,6 +29,7 @@ final class AppModel: ObservableObject {
     private var inRound = 0
 
     private let camera = Camera()
+    private var hint20Px: SIMD2<Double>?
     private var lastFrame: RGBImage?
     private var lastPreviewAt = Date.distantPast
     // カメラのキューから触るもの
@@ -129,11 +130,28 @@ final class AppModel: ObservableObject {
     // MARK: - キャリブレーション
 
     /// 盤の色で自動キャリブレーション。終わったら completion(成功したか)
-    func autoCalibrate(quiet: Bool = false, completion: ((Bool) -> Void)? = nil) {
+    /// 「20 はここ」を待っている
+    @Published var picking20 = false
+
+    /// 画面の上が、処理画像(カメラ本来の横向き)でどっち向きか
+    var upInImage: SIMD2<Double> {
+        switch rot {
+        case 1: return [-1, 0]
+        case 2: return [0, 1]
+        case 3: return [1, 0]
+        default: return [0, -1]
+        }
+    }
+
+    func autoCalibrate(quiet: Bool = false, hint20: SIMD2<Double>? = nil, completion: ((Bool) -> Void)? = nil) {
         guard let f = lastFrame else { completion?(false); return }
         if !quiet { status = "盤を探してる…" }
+        let up = upInImage
+        // 一度「20 はここ」と教えてもらったら、以降もその向きを使う
+        if let hint20 { hint20Px = hint20 }
+        let hint = hint20Px
         Task.detached(priority: .userInitiated) {
-            let r = AutoCalib.calibrate(f)
+            let r = AutoCalib.calibrate(f, up: up, hint20Px: hint)
             await MainActor.run {
                 if let r, r.rmsPx < 3 {
                     self.cal = r.cal
@@ -241,8 +259,9 @@ final class AppModel: ObservableObject {
     /// ダーツを抜いて盤がきれいなとき、自動キャリブをやり直してカメラのずれに追従する(board.py と同じ)
     private func refollow() {
         guard let f = lastFrame, let old = cal, mode == .recording else { return }
+        let up = upInImage, hint = hint20Px
         Task.detached(priority: .utility) {
-            let r = AutoCalib.calibrate(f)
+            let r = AutoCalib.calibrate(f, up: up, hint20Px: hint)
             await MainActor.run {
                 guard self.mode == .recording, let r, r.rmsPx < 3 else { return }
                 let moved = simd_length(r.cal.toPx([0, 0]) - old.toPx([0, 0]))

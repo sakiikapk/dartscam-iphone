@@ -60,13 +60,29 @@ struct Split<Main: View, Panel: View>: View {
     var body: some View {
         GeometryReader { geo in
             let portrait = geo.size.height > geo.size.width
-            let layout = portrait ? AnyLayout(VStackLayout(spacing: 0)) : AnyLayout(HStackLayout(spacing: 0))
-            layout {
-                main()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(Color.black)
-                ScrollView { panel() }
-                    .frame(width: portrait ? geo.size.width : 230, height: portrait ? 250 : geo.size.height)
+            Group {
+                if portrait {
+                    // 縦持ち: 画面の下は台座に隠れがちなので、操作は上に半透明で重ねる
+                    ZStack(alignment: .top) {
+                        main()
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .background(Color.black)
+                        ScrollView { panel() }
+                            .frame(maxHeight: geo.size.height * 0.45)
+                            .background(.ultraThinMaterial.opacity(0.9))
+                            .clipShape(RoundedRectangle(cornerRadius: 14))
+                            .padding(.horizontal, 6)
+                            .padding(.top, 4)
+                    }
+                } else {
+                    HStack(spacing: 0) {
+                        main()
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .background(Color.black)
+                        ScrollView { panel() }
+                            .frame(width: 250, height: geo.size.height)
+                    }
+                }
             }
             .onAppear { model.updateRotation() }
             .onChange(of: geo.size) { model.updateRotation() }
@@ -121,6 +137,13 @@ struct LiveView: View {
                     }
                 }
                 .contentShape(Rectangle())
+                .onTapGesture { loc in
+                    // 「20 はここ」待ちのときは、タップした所を 20 の向きとして合わせ直す
+                    if model.picking20 {
+                        model.picking20 = false
+                        model.autoCalibrate(hint20: fit.toImg(loc))
+                    }
+                }
                 .gesture(DragGesture(minimumDistance: 4)
                     .onChanged { v in
                         if dragging == nil {
@@ -167,14 +190,21 @@ struct SidePanel: View {
             switch model.mode {
             case .live:
                 HStack {
-                    Button("自動キャリブレーション") { model.autoCalibrate() }
+                    Button("自動キャリブ") { model.autoCalibrate() }
                         .buttonStyle(.bordered)
                     Button("記録スタート") { model.startSession() }
                         .buttonStyle(.borderedProminent)
                         .disabled(model.cal == nil)
                 }
-                Button("うまくいかんときは手動(5点タップ)") { model.beginCalibration() }
-                    .font(.caption)
+                .controlSize(.large)
+                HStack {
+                    Button(model.picking20 ? "画面の 20 を押して…" : "20がずれてる") { model.picking20.toggle() }
+                        .buttonStyle(.bordered)
+                        .tint(model.picking20 ? .yellow : nil)
+                        .disabled(model.cal == nil)
+                    Button("手動5点") { model.beginCalibration() }
+                        .buttonStyle(.bordered)
+                }
             case .recording:
                 HStack {
                     Button("記録おわり") { model.stopSession() }
@@ -183,6 +213,7 @@ struct SidePanel: View {
                         .buttonStyle(.bordered)
                         .disabled(model.hits.isEmpty)
                 }
+                .controlSize(.large)
             case .calibrating:
                 EmptyView()
             }
