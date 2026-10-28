@@ -237,8 +237,8 @@ enum AutoCalib {
         let l1 = (A + C) / 2 + ((A - C) / 2 * (A - C) / 2 + B * B / 4).squareRoot()
         let l2 = (A + C) / 2 - ((A - C) / 2 * (A - C) / 2 + B * B / 4).squareRoot()
         guard l1 > 0, l2 > 0 else { return nil }
-        // th は l2(小さい固有値 = 長軸)の向き。rot で長軸を x に合わせる
-        return (1 / l2.squareRoot(), 1 / l1.squareRoot(), th)
+        // th は l1(大きい固有値 = 短軸)の向き。rot で th を x に合わせるので、x 側が短軸
+        return (1 / l1.squareRoot(), 1 / l2.squareRoot(), th)
     }
 
     /// RANSAC でホモグラフィ(外れ値のマスを捨てる)。inliers は src の番号
