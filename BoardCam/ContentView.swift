@@ -204,18 +204,28 @@ struct SidePanel: View {
         var id: Int { rawValue }
     }
     @State private var sheet: Sheet?
+    /// たたむと状態と主ボタンだけ(縦持ちで盤を隠さないように)
+    @State private var collapsed = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("BoardCam").font(.headline)
+                Button {
+                    withAnimation { collapsed.toggle() }
+                } label: {
+                    Label("BoardCam", systemImage: collapsed ? "chevron.down" : "chevron.up")
+                        .font(.headline).labelStyle(.titleAndIcon)
+                }
+                .buttonStyle(.plain)
                 Spacer()
                 Button { sheet = .history } label: { Image(systemName: "clock.arrow.circlepath") }
                 Button { sheet = .settings } label: { Image(systemName: "gearshape") }
                     .disabled(model.mode == .recording)
             }
             Text(model.status).font(.footnote).fixedSize(horizontal: false, vertical: true)
-            Text("\(model.spec.name)・狙い \(model.target.rawValue)").font(.caption2).foregroundStyle(.secondary)
+            if !collapsed {
+                Text("\(model.spec.name)・狙い \(model.target.rawValue)").font(.caption2).foregroundStyle(.secondary)
+            }
             switch model.mode {
             case .live:
                 HStack {
@@ -226,19 +236,21 @@ struct SidePanel: View {
                         .disabled(model.cal == nil)
                 }
                 .controlSize(.large)
-                HStack {
-                    Image(systemName: "minus.magnifyingglass")
-                    Slider(value: Binding(get: { model.zoom }, set: { model.setZoom($0) }), in: 1...5)
-                    Text(String(format: "%.1fx", model.zoom)).frame(width: 40)
-                }
-                Text("盤が画面の半分以上になるまでズーム(ピンチでもOK)").font(.caption2).foregroundStyle(.secondary)
-                HStack {
-                    Button(model.picking20 ? "画面の 20 を押して…" : "20がずれてる") { model.picking20.toggle() }
-                        .buttonStyle(.bordered)
-                        .tint(model.picking20 ? .yellow : nil)
-                        .disabled(model.cal == nil)
-                    Button("手動5点") { model.beginCalibration() }
-                        .buttonStyle(.bordered)
+                if !collapsed {
+                    HStack {
+                        Image(systemName: "minus.magnifyingglass")
+                        Slider(value: Binding(get: { model.zoom }, set: { model.setZoom($0) }), in: 1...5)
+                        Text(String(format: "%.1fx", model.zoom)).frame(width: 40)
+                    }
+                    Text("盤が画面の半分以上になるまでズーム(ピンチでもOK)").font(.caption2).foregroundStyle(.secondary)
+                    HStack {
+                        Button(model.picking20 ? "画面の 20 を押して…" : "20がずれてる") { model.picking20.toggle() }
+                            .buttonStyle(.bordered)
+                            .tint(model.picking20 ? .yellow : nil)
+                            .disabled(model.cal == nil)
+                        Button("手動5点") { model.beginCalibration() }
+                            .buttonStyle(.bordered)
+                    }
                 }
             case .recording:
                 HStack {
@@ -252,30 +264,34 @@ struct SidePanel: View {
             case .calibrating:
                 EmptyView()
             }
-            Divider()
-            if let r = model.roundText {
-                Text(r).font(.title3.monospacedDigit().bold())
-            }
-            let st = model.stats
-            Text("\(model.hits.count) 本").font(.headline.monospacedDigit())
-            if st.n >= 3 {
-                Text(String(format: "σ %.0f mm(x %.0f / y %.0f)", st.sigma, st.sx, st.sy))
-                Text(String(format: "1R平均 %.1f 点  %@率 %.0f%%", st.ppr, st.target.rawValue, st.hitRate * 100))
-                Text("平均のずれ: \(st.offsetText)")
-            }
-            if !model.hits.isEmpty {
-                Button {
-                    sheet = .summary
-                } label: {
-                    Label("まとめ(盤面の散らばり)", systemImage: "scope")
+            if collapsed {
+                if let r = model.roundText { Text(r).font(.callout.monospacedDigit().bold()) }
+            } else {
+                Divider()
+                if let r = model.roundText {
+                    Text(r).font(.title3.monospacedDigit().bold())
                 }
-            }
-            if let dir = model.sessionDir, model.mode == .live, !model.hits.isEmpty {
-                ShareLink(item: dir.appendingPathComponent("hits.csv")) {
-                    Label("CSVを送る", systemImage: "square.and.arrow.up")
+                let st = model.stats
+                Text("\(model.hits.count) 本").font(.headline.monospacedDigit())
+                if st.n >= 3 {
+                    Text(String(format: "σ %.0f mm(x %.0f / y %.0f)", st.sigma, st.sx, st.sy))
+                    Text(String(format: "1R平均 %.1f 点  %@率 %.0f%%", st.ppr, st.target.rawValue, st.hitRate * 100))
+                    Text("平均のずれ: \(st.offsetText)")
                 }
+                if !model.hits.isEmpty {
+                    Button {
+                        sheet = .summary
+                    } label: {
+                        Label("まとめ(盤面の散らばり)", systemImage: "scope")
+                    }
+                }
+                if let dir = model.sessionDir, model.mode == .live, !model.hits.isEmpty {
+                    ShareLink(item: dir.appendingPathComponent("hits.csv")) {
+                        Label("CSVを送る", systemImage: "square.and.arrow.up")
+                    }
+                }
+                Text("点はドラッグで直せる").font(.caption2).foregroundStyle(.secondary)
             }
-            Text("点はドラッグで直せる").font(.caption2).foregroundStyle(.secondary)
         }
         .font(.footnote.monospacedDigit())
         .padding(12)
