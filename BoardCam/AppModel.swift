@@ -259,7 +259,8 @@ final class AppModel: ObservableObject {
     /// ダーツを抜いて盤がきれいなとき、自動キャリブをやり直してカメラのずれに追従する(board.py と同じ)
     private func refollow() {
         guard let f = lastFrame, let old = cal, mode == .recording else { return }
-        let up = upInImage, hint = hint20Px
+        // 記録中の追従は、画面の向きより「さっきまでの 20 の向き」を手がかりにする方が確実
+        let up = upInImage, hint = hint20Px ?? old.toPx([0, 150])
         Task.detached(priority: .utility) {
             let r = AutoCalib.calibrate(f, up: up, hint20Px: hint)
             await MainActor.run {
