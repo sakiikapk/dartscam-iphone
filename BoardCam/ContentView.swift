@@ -1,38 +1,88 @@
 import SwiftUI
 import simd
 
-/// 画像(処理画像の px)と画面(pt)の対応。画像は枠の中央に縦横比を保って収める
+/// 処理画像(カメラ本来の向き、px)と画面(pt)の対応。
+/// 表示は画面の向きに合わせて時計回りに 90°×rot 回し、枠の中央に縦横比を保って収める
 struct Fit {
     let scale: CGFloat
     let ox: CGFloat
     let oy: CGFloat
+    let rot: Int
+    let W: Double
+    let H: Double
 
-    init(imgW: Int, imgH: Int, in size: CGSize) {
-        scale = min(size.width / CGFloat(imgW), size.height / CGFloat(imgH))
-        ox = (size.width - CGFloat(imgW) * scale) / 2
-        oy = (size.height - CGFloat(imgH) * scale) / 2
+    init(imgW: Int, imgH: Int, rot: Int, in size: CGSize) {
+        self.rot = ((rot % 4) + 4) % 4
+        W = Double(imgW)
+        H = Double(imgH)
+        let dw = CGFloat(self.rot % 2 == 1 ? imgH : imgW), dh = CGFloat(self.rot % 2 == 1 ? imgW : imgH)
+        scale = min(size.width / dw, size.height / dh)
+        ox = (size.width - dw * scale) / 2
+        oy = (size.height - dh * scale) / 2
     }
 
-    func toView(_ p: SIMD2<Double>) -> CGPoint { CGPoint(x: ox + CGFloat(p.x) * scale, y: oy + CGFloat(p.y) * scale) }
-    func toImg(_ p: CGPoint) -> SIMD2<Double> { [Double((p.x - ox) / scale), Double((p.y - oy) / scale)] }
+    /// 処理画像の点 → 回した表示画像の点
+    func toDisp(_ p: SIMD2<Double>) -> SIMD2<Double> {
+        switch rot {
+        case 1: return [H - p.y, p.x]
+        case 2: return [W - p.x, H - p.y]
+        case 3: return [p.y, W - p.x]
+        default: return p
+        }
+    }
+
+    func fromDisp(_ d: SIMD2<Double>) -> SIMD2<Double> {
+        switch rot {
+        case 1: return [d.y, H - d.x]
+        case 2: return [W - d.x, H - d.y]
+        case 3: return [W - d.y, d.x]
+        default: return d
+        }
+    }
+
+    /// 画面の点 → 表示画像の点(拡大鏡用)
+    func dispPoint(_ p: CGPoint) -> SIMD2<Double> { [Double((p.x - ox) / scale), Double((p.y - oy) / scale)] }
+
+    func toView(_ p: SIMD2<Double>) -> CGPoint {
+        let d = toDisp(p)
+        return CGPoint(x: ox + CGFloat(d.x) * scale, y: oy + CGFloat(d.y) * scale)
+    }
+
+    func toImg(_ p: CGPoint) -> SIMD2<Double> { fromDisp(dispPoint(p)) }
+}
+
+/// 縦なら画像の下にパネル、横なら右にパネル
+struct Split<Main: View, Panel: View>: View {
+    @EnvironmentObject var model: AppModel
+    @ViewBuilder let main: () -> Main
+    @ViewBuilder let panel: () -> Panel
+
+    var body: some View {
+        GeometryReader { geo in
+            let portrait = geo.size.height > geo.size.width
+            let layout = portrait ? AnyLayout(VStackLayout(spacing: 0)) : AnyLayout(HStackLayout(spacing: 0))
+            layout {
+                main()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(Color.black)
+                ScrollView { panel() }
+                    .frame(width: portrait ? geo.size.width : 230, height: portrait ? 250 : geo.size.height)
+            }
+            .onAppear { model.updateRotation() }
+            .onChange(of: geo.size) { model.updateRotation() }
+        }
+    }
 }
 
 struct ContentView: View {
     @EnvironmentObject var model: AppModel
 
     var body: some View {
-        HStack(spacing: 0) {
-            Group {
-                if model.mode == .calibrating, let f = model.frozen {
-                    CalibrationView(frame: f)
-                } else {
-                    LiveView()
-                }
-            }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .background(Color.black)
-            if model.mode != .calibrating {
-                SidePanel().frame(width: 230)
+        Group {
+            if model.mode == .calibrating, let f = model.frozen {
+                CalibrationView(frame: f)
+            } else {
+                Split { LiveView() } panel: { SidePanel() }
             }
         }
         .preferredColorScheme(.dark)
@@ -47,7 +97,7 @@ struct LiveView: View {
     var body: some View {
         GeometryReader { geo in
             if let img = model.preview {
-                let fit = Fit(imgW: img.width, imgH: img.height, in: geo.size)
+                let fit = Fit(imgW: model.imgW, imgH: model.imgH, rot: model.rot, in: geo.size)
                 ZStack(alignment: .topLeading) {
                     Image(decorative: img, scale: 1)
                         .resizable()
@@ -67,7 +117,7 @@ struct LiveView: View {
                         }
                     }
                     if let d = dragPos {
-                        Loupe(image: img, center: fit.toImg(d)).padding(8)
+                        Loupe(image: img, center: fit.dispPoint(d)).padding(8)
                     }
                 }
                 .contentShape(Rectangle())

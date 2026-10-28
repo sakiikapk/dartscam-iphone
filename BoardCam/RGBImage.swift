@@ -36,6 +36,40 @@ struct RGBImage {
         px = out
     }
 
+    private init(w: Int, h: Int, px: [UInt8]) {
+        self.w = w
+        self.h = h
+        self.px = px
+    }
+
+    /// 表示用に時計回りに 90°×k 回した画像(処理はいつもカメラ本来の向きのまま)
+    func rotated(_ k: Int) -> RGBImage {
+        let k = ((k % 4) + 4) % 4
+        if k == 0 { return self }
+        let (W, H) = (w, h)
+        let dw = k % 2 == 1 ? H : W, dh = k % 2 == 1 ? W : H
+        var out = [UInt8](repeating: 0, count: dw * dh * 3)
+        px.withUnsafeBufferPointer { s in
+            out.withUnsafeMutableBufferPointer { o in
+                for v in 0..<dh {
+                    for u in 0..<dw {
+                        let x: Int, y: Int
+                        switch k {
+                        case 1: x = v; y = H - 1 - u
+                        case 2: x = W - 1 - u; y = H - 1 - v
+                        default: x = W - 1 - v; y = u
+                        }
+                        let si = (y * W + x) * 3, oi = (v * dw + u) * 3
+                        o[oi] = s[si]
+                        o[oi + 1] = s[si + 1]
+                        o[oi + 2] = s[si + 2]
+                    }
+                }
+            }
+        }
+        return RGBImage(w: dw, h: dh, px: out)
+    }
+
     func cgImage() -> CGImage? {
         let data = Data(px) as CFData
         guard let prov = CGDataProvider(data: data) else { return nil }

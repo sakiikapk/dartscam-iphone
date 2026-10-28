@@ -16,10 +16,10 @@ struct CalibrationView: View {
     }
 
     var body: some View {
-        HStack(spacing: 0) {
+        Split {
             GeometryReader { geo in
                 if let img = cg {
-                    let fit = Fit(imgW: frame.w, imgH: frame.h, in: geo.size)
+                    let fit = Fit(imgW: frame.w, imgH: frame.h, rot: model.rot, in: geo.size)
                     ZStack(alignment: .topLeading) {
                         Image(decorative: img, scale: 1)
                             .resizable()
@@ -39,7 +39,7 @@ struct CalibrationView: View {
                         }
                         if let t = touching {
                             // 指の反対側に拡大鏡を出す
-                            Loupe(image: img, center: fit.toImg(t), radius: 20, size: 170)
+                            Loupe(image: img, center: fit.dispPoint(t), radius: 20, size: 170)
                                 .padding(8)
                                 .frame(maxWidth: .infinity, alignment: t.x < geo.size.width / 2 ? .trailing : .leading)
                         }
@@ -53,6 +53,7 @@ struct CalibrationView: View {
                         .onEnded { _ in touching = nil })
                 }
             }
+        } panel: {
             VStack(alignment: .leading, spacing: 12) {
                 Text("キャリブレーション \(k + 1)/\(taps.count)").font(.headline)
                 Text("「\(Board.calibPoints[k].name)」を押して、拡大鏡の十字が合うまで指をずらす")
@@ -68,14 +69,14 @@ struct CalibrationView: View {
                     Button("これでOK") { model.finishCalibration(taps: taps.compactMap { $0 }) }
                         .buttonStyle(.borderedProminent)
                 }
-                Spacer()
                 Button("やめる", role: .cancel) { model.cancelCalibration() }
             }
             .padding(12)
-            .frame(width: 230)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
+        .onChange(of: model.rot) { cg = frame.rotated(model.rot).cgImage() }
         .onAppear {
-            cg = frame.cgImage()
+            cg = frame.rotated(model.rot).cgImage()
             // 前回の点があれば初期位置にする(カメラを少し動かしただけなら微調整で済む)
             if let c = model.cal, c.imgW == frame.w, c.tapsPx.count == taps.count {
                 taps = c.tapsPx.map { SIMD2($0[0], $0[1]) }

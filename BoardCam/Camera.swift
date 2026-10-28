@@ -31,7 +31,7 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
         out.setSampleBufferDelegate(self, queue: queue)
         if session.canAddOutput(out) { session.addOutput(out) }
         if let conn = out.connection(with: .video) {
-            // 画面は横向き(ホームボタン/端子が右)固定。それに合わせた向きで受け取る
+            // 処理はいつもカメラ本来の向き(横・端子が右)。縦持ちのときは表示だけ回す
             if conn.isVideoRotationAngleSupported(0) { conn.videoRotationAngle = 0 }
         }
         try? dev.lockForConfiguration()

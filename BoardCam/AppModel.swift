@@ -15,6 +15,10 @@ final class AppModel: ObservableObject {
     @Published var sessionDir: URL?
     /// キャリブレーション用に止めた1枚
     @Published var frozen: RGBImage?
+    /// 表示の回転(時計回り 90°×rot)。処理と保存はいつもカメラ本来の向き
+    @Published var rot = 0
+    @Published var imgW = 960
+    @Published var imgH = 540
 
     private let camera = Camera()
     private var lastFrame: RGBImage?
@@ -42,10 +46,23 @@ final class AppModel: ObservableObject {
         Task { @MainActor in
             self.lastFrame = img
             if Date().timeIntervalSince(self.lastPreviewAt) > 1.0 / 15 {
-                self.preview = img.cgImage()
+                self.imgW = img.w
+                self.imgH = img.h
+                self.preview = img.rotated(self.rot).cgImage()
                 self.lastPreviewAt = Date()
             }
             if let r = result, let s0 { self.handle(r, start: s0) }
+        }
+    }
+
+    /// 画面の向きから表示の回転を決める(カメラ本来の向き = 横・端子が右)
+    func updateRotation() {
+        let scene = UIApplication.shared.connectedScenes.first as? UIWindowScene
+        switch scene?.interfaceOrientation {
+        case .portrait: rot = 1
+        case .landscapeLeft: rot = 2
+        case .portraitUpsideDown: rot = 3
+        default: rot = 0
         }
     }
 
