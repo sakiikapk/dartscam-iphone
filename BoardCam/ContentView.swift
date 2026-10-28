@@ -1,3 +1,4 @@
+import AVKit
 import SwiftUI
 import simd
 
@@ -102,6 +103,27 @@ struct ContentView: View {
             }
         }
         .preferredColorScheme(.dark)
+        .modifier(VolumeButtons())
+    }
+}
+
+/// 音量ボタン(とカメラコントロール)で 記録スタート/記録おわり を切り替える。画面に触らずに済むように
+struct VolumeButtons: ViewModifier {
+    @EnvironmentObject var model: AppModel
+
+    func body(content: Content) -> some View {
+        if #available(iOS 18.0, *) {
+            content.onCameraCaptureEvent { event in
+                guard event.phase == .ended else { return }
+                switch model.mode {
+                case .live where model.cal != nil: model.startSession()
+                case .recording: model.stopSession()
+                default: break
+                }
+            }
+        } else {
+            content
+        }
     }
 }
 
