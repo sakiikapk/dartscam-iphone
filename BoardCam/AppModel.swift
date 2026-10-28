@@ -252,6 +252,7 @@ final class AppModel: ObservableObject {
         inRound = 0
         sessionStart = Date()
         detector = Detector(cal: c)
+        detector?.onEvent = { [weak self] line in self?.logEvent(line) }
         mode = .recording
         status = "記録中。投げてOK(ダーツを抜くと自動で区切る)"
         writeCSV()
@@ -302,6 +303,7 @@ final class AppModel: ObservableObject {
                 guard moved > 3 else { return }
                 self.cal = r.cal
                 self.detector = Detector(cal: r.cal)
+                self.detector?.onEvent = { [weak self] line in self?.logEvent(line) }
                 self.status = String(format: "カメラが %.0fpx ずれてたので合わせ直した", moved)
                 if let dir = self.sessionDir {
                     try? JSONEncoder().encode(r.cal).write(to: dir.appendingPathComponent("calibration.json"))
@@ -345,6 +347,22 @@ final class AppModel: ObservableObject {
                 status = "\(no)本目: ダーツが見つからへん(\(note))"
             }
             writeCSV()
+        }
+    }
+
+    /// 動きの区間ごとの判定を events.csv に追記する(カメラのキューから呼ばれる)
+    nonisolated private func logEvent(_ line: String) {
+        Task { @MainActor in
+            guard let dir = self.sessionDir else { return }
+            let url = dir.appendingPathComponent("events.csv")
+            if !FileManager.default.fileExists(atPath: url.path) {
+                try? (Detector.eventHeader + "\n").write(to: url, atomically: true, encoding: .utf8)
+            }
+            if let h = try? FileHandle(forWritingTo: url) {
+                h.seekToEndOfFile()
+                h.write((line + "\n").data(using: .utf8)!)
+                try? h.close()
+            }
         }
     }
 

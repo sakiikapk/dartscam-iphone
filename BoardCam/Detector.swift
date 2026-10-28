@@ -24,6 +24,9 @@ final class Detector {
     }
 
     let cal: Calibration
+    /// 動きの区間ごとの判定ログ(CSV 1行)。なぜ拾った/見落としたかを後で追うため
+    var onEvent: ((String) -> Void)?
+    static let eventHeader = "start_s,end_s,count_darts,blob_darts,aspect,align_deg,on_board,decision"
     private let roi: (x0: Int, y0: Int, w: Int, h: Int)
     private let roiMask: [Bool]
     private let ppm: Double
@@ -99,19 +102,69 @@ final class Detector {
         eventBefore = nil
         lastQuiet = img
         let (count, diff) = changed(before, img)
-        if count < dartArea * 0.04 { return nil }  // 露出の揺れ、影だけ
+        let shape = dartShape(diff)
+        func log(_ decision: String) {
+            onEvent?(String(format: "%.2f,%.2f,%.2f,%.2f,%.1f,%.0f,%d,%@", start, lastActive, count / dartArea,
+                            shape.blobDarts, shape.aspect, shape.alignDeg, dartsOnBoard, decision))
+        }
+        if count < dartArea * 0.04 {  // 露出の揺れ、影だけ
+            log("ignored_small")
+            return nil
+        }
         // 何本目でも、刺さっているダーツが消えていたら「抜いた」(1〜2本で抜いたときも区切る)
-        if count > dartArea * 3 || lastActive - start > 2.0 || dartsOnBoard >= 6 || removedDart(diff) {
+        if removedDart(diff) {
+            log("reset_removed")
             resetCount()
             return .reset
+        }
+        if count > dartArea * 3 || dartsOnBoard >= 6 {
+            log("reset_big")
+            resetCount()
+            return .reset
+        }
+        // 変化がダーツの形(細長くて、刺さる向き)をしていなければ数えない(影、人が近づいた、など)
+        if !shape.isDart {
+            log("ignored_not_dart")
+            return nil
         }
         dartsOnBoard += 1
         let off = SIMD2<Double>(Double(roi.x0), Double(roi.y0))
         if let r = findTip(diff, off: off) {
             onBoard.append(r.0 + off)
+            log("hit" + (r.1.isEmpty ? "" : "_" + r.1))
             return .hit(t: start, tip: r.0 + off, note: r.1, before: before, after: img)
         }
+        log("hit_no_dart_found")
         return .hit(t: start, tip: nil, note: "no_dart_found", before: before, after: img)
+    }
+
+    /// 差分の一番大きな塊が「ダーツ1本」らしいか。大きさ(1本の 1/4 以上)、細長さ、刺さる向きとの一致で見る
+    private func dartShape(_ diff: [Float]) -> (isDart: Bool, blobDarts: Double, aspect: Double, alignDeg: Double) {
+        let W = roi.w, Hh = roi.h
+        let m = Morph.close(diff.map { $0 > 40 }, W, Hh, r: 2)
+        let cc = Morph.components(m, W, Hh)
+        guard let biggest = cc.stats.enumerated().max(by: { $0.element.area < $1.element.area }) else {
+            return (false, 0, 0, 90)
+        }
+        let (j, big) = (biggest.offset, biggest.element)
+        var pts: [SIMD2<Double>] = []
+        for i in 0..<(W * Hh) where cc.labels[i] == j { pts.append([Double(i % W), Double(i / W)]) }
+        guard pts.count > 5 else { return (false, 0, 0, 90) }
+        let (mu, ax) = Morph.fitLine(pts)
+        let nrm = SIMD2<Double>(-ax.y, ax.x)
+        var along = 0.0, perp = 0.0
+        for p in pts {
+            let d = p - mu
+            along += simd_dot(d, ax) * simd_dot(d, ax)
+            perp += simd_dot(d, nrm) * simd_dot(d, nrm)
+        }
+        let aspect = (along / max(perp, 1e-6)).squareRoot()
+        let off = SIMD2<Double>(Double(roi.x0), Double(roi.y0))
+        let dv = simd_normalize(cal.dartVec(big.centroid + off))
+        let alignDeg = acos(min(1, abs(simd_dot(ax, dv)))) * 180 / .pi
+        let blobDarts = Double(big.area) / dartArea
+        let isDart = blobDarts >= 0.25 && blobDarts <= 2.5 && aspect >= 2.0 && alignDeg <= 40
+        return (isDart, blobDarts, aspect, alignDeg)
     }
 
     /// 刺さっていたダーツのどれかが、チップからフライト側へほぼ全部変わっていたら「抜いた」とみなす。
