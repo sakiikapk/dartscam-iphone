@@ -27,6 +27,8 @@ final class AppModel: ObservableObject {
     @Published var sound = true
     /// デジタルズーム(ピンチかスライダー)
     @Published var zoom = 1.0
+    /// 縦持ちのとき操作を画面の上に出すか(false なら下)
+    @Published var panelTop = true
     private var round = 1
     private var inRound = 0
 
@@ -48,6 +50,7 @@ final class AppModel: ObservableObject {
         target = Target(rawValue: ud.string(forKey: "target") ?? "") ?? .bull
         sound = ud.object(forKey: "sound") as? Bool ?? true
         zoom = ud.object(forKey: "zoom") as? Double ?? 1
+        panelTop = ud.object(forKey: "panelTop") as? Bool ?? true
         camera.setZoom(zoom)
         camera.onFrame = { [weak self] img, wall in self?.onFrame(img, wall) }
         camera.start()
@@ -115,6 +118,11 @@ final class AppModel: ObservableObject {
         zoom = min(max(z, 1), 5)
         camera.setZoom(zoom)
         UserDefaults.standard.set(zoom, forKey: "zoom")
+    }
+
+    func setPanelTop(_ top: Bool) {
+        panelTop = top
+        UserDefaults.standard.set(top, forKey: "panelTop")
     }
 
     func setSound(_ on: Bool) {

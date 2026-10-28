@@ -213,6 +213,11 @@ struct SettingsView: View {
                 }
                 Section {
                     Toggle("刺さったら音とバイブ", isOn: Binding(get: { model.sound }, set: { model.setSound($0) }))
+                    Picker("縦持ちの操作パネル", selection: Binding(get: { model.panelTop }, set: { model.setPanelTop($0) })) {
+                        Text("上").tag(true)
+                        Text("下").tag(false)
+                    }
+                    .pickerStyle(.segmented)
                 }
             }
             .navigationTitle("設定")

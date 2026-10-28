@@ -63,8 +63,8 @@ struct Split<Main: View, Panel: View>: View {
             let portrait = geo.size.height > geo.size.width
             Group {
                 if portrait {
-                    // 縦持ち: 画面の下は台座に隠れがちなので、操作は上に半透明で重ねる
-                    ZStack(alignment: .top) {
+                    // 縦持ち: 操作は半透明で画面に重ねる。上か下かは設定で選べる(台座で隠れる側を避ける)
+                    ZStack(alignment: model.panelTop ? .top : .bottom) {
                         main()
                             .frame(maxWidth: .infinity, maxHeight: .infinity)
                             .background(Color.black)
@@ -73,7 +73,7 @@ struct Split<Main: View, Panel: View>: View {
                             .background(.ultraThinMaterial.opacity(0.9))
                             .clipShape(RoundedRectangle(cornerRadius: 14))
                             .padding(.horizontal, 6)
-                            .padding(.top, 4)
+                            .padding(model.panelTop ? .top : .bottom, 4)
                     }
                 } else {
                     HStack(spacing: 0) {
