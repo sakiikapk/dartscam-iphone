@@ -1,5 +1,7 @@
+import AudioToolbox
 import Foundation
 import SwiftUI
+import UIKit
 import simd
 
 /// 画面の状態と、1セッション分の記録(CSV + 静止画)を持つ。
@@ -19,6 +21,12 @@ final class AppModel: ObservableObject {
     @Published var rot = 0
     @Published var imgW = 960
     @Published var imgH = 540
+    /// 盤の種類・狙い・音(設定画面)
+    @Published var spec: BoardSpec = .soft()
+    @Published var target: Target = .bull
+    @Published var sound = true
+    private var round = 1
+    private var inRound = 0
 
     private let camera = Camera()
     private var lastFrame: RGBImage?
@@ -28,6 +36,13 @@ final class AppModel: ObservableObject {
     nonisolated(unsafe) private var sessionStart: Date?
 
     init() {
+        let ud = UserDefaults.standard
+        if let d = ud.data(forKey: "boardSpec"), let sp = try? JSONDecoder().decode(BoardSpec.self, from: d) {
+            spec = sp
+            Board.spec = sp
+        }
+        target = Target(rawValue: ud.string(forKey: "target") ?? "") ?? .bull
+        sound = ud.object(forKey: "sound") as? Bool ?? true
         camera.onFrame = { [weak self] img, wall in self?.onFrame(img, wall) }
         camera.start()
         if let data = UserDefaults.standard.data(forKey: "calibration"),
@@ -64,6 +79,51 @@ final class AppModel: ObservableObject {
         case .portraitUpsideDown: rot = 3
         default: rot = 0
         }
+    }
+
+    // MARK: - 設定
+
+    /// 盤の種類を変える。キャリブレーションは同じタップ位置のまま新しい寸法で解き直す
+    func setSpec(_ sp: BoardSpec) {
+        spec = sp
+        Board.spec = sp
+        if let d = try? JSONEncoder().encode(sp) { UserDefaults.standard.set(d, forKey: "boardSpec") }
+        if let c = cal?.resolved() {
+            cal = c
+            if let data = try? JSONEncoder().encode(c) { UserDefaults.standard.set(data, forKey: "calibration") }
+        }
+    }
+
+    func setTarget(_ t: Target) {
+        target = t
+        UserDefaults.standard.set(t.rawValue, forKey: "target")
+    }
+
+    func setSound(_ on: Bool) {
+        sound = on
+        UserDefaults.standard.set(on, forKey: "sound")
+    }
+
+    /// 集計に使う本(座標が取れたもの)
+    var shots: [Shot] {
+        hits.compactMap { h in
+            guard let mm = h.mm, h.note != "tip_hidden", h.note != "no_dart_found" else { return nil }
+            let sc = Board.score(x: mm.x, y: mm.y)
+            return Shot(no: h.no, mm: mm, round: h.round, label: sc.label, points: sc.points)
+        }
+    }
+
+    var stats: SessionStats { SessionStats(shots: shots, target: target) }
+
+    /// 今のラウンドの表示(例 "R5: T20 S1 BULL = 111")
+    var roundText: String? {
+        guard let last = hits.last else { return nil }
+        let cur = hits.filter { $0.round == last.round }
+        let parts = cur.map { h -> (String, Int) in
+            guard let mm = h.mm, h.note != "no_dart_found" else { return ("?", 0) }
+            return Board.score(x: mm.x, y: mm.y)
+        }
+        return "R\(last.round): " + parts.map { $0.0 }.joined(separator: " ") + " = \(parts.map { $0.1 }.reduce(0, +))"
     }
 
     // MARK: - キャリブレーション
@@ -106,6 +166,8 @@ final class AppModel: ObservableObject {
         try? JSONEncoder().encode(c).write(to: dir.appendingPathComponent("calibration.json"))
         sessionDir = dir
         hits = []
+        round = 1
+        inRound = 0
         sessionStart = Date()
         detector = Detector(cal: c)
         mode = .recording
@@ -125,6 +187,13 @@ final class AppModel: ObservableObject {
     func undoLast() {
         guard !hits.isEmpty else { return }
         hits.removeLast()
+        if let last = hits.last {
+            round = last.round
+            inRound = hits.filter { $0.round == round }.count
+        } else {
+            round = 1
+            inRound = 0
+        }
         writeCSV()
     }
 
@@ -140,22 +209,36 @@ final class AppModel: ObservableObject {
     private func handle(_ r: Detector.Result, start: Date) {
         switch r {
         case .reset:
+            if inRound > 0 {
+                round += 1
+                inRound = 0
+            }
             status = "ダーツを抜いた(\(hits.count)本目まで記録)"
         case let .hit(t, tip, note, before, after):
             guard let c = cal else { return }
             let no = hits.count + 1
+            if inRound >= 3 {
+                round += 1
+                inRound = 0
+            }
+            inRound += 1
             var mm: SIMD2<Double>? = nil
             if let tip { mm = c.toMM(tip) }
             let h = Hit(no: no, t: t, wall: start.addingTimeInterval(t), tipPx: tip, mm: mm, note: note,
-                        before: nil, after: nil)  // 画像はファイルに書くだけ(メモリに溜めない)
+                        before: nil, after: nil, round: round)  // 画像はファイルに書くだけ(メモリに溜めない)
             hits.append(h)
+            if sound {
+                AudioServicesPlaySystemSound(1057)
+                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+            }
             if let dir = sessionDir {
                 try? before.jpeg()?.write(to: dir.appendingPathComponent(String(format: "hit%03d_a.jpg", no)))
                 try? after.jpeg()?.write(to: dir.appendingPathComponent(String(format: "hit%03d_b.jpg", no)))
             }
             if let mm {
-                status = String(format: "%d本目: %@ (%.0f mm)%@", no, Board.label(x: mm.x, y: mm.y),
-                                simd_length(mm), note.isEmpty ? "" : " ※チップ見えず、ずれてたら点を動かして")
+                let sc = Board.score(x: mm.x, y: mm.y)
+                status = String(format: "%d本目: %@ %d点 (%.0f mm)%@", no, sc.label, sc.points,
+                                simd_length(mm - target.point), note.isEmpty ? "" : " ※チップ見えず、ずれてたら点を動かして")
             } else {
                 status = "\(no)本目: ダーツが見つからへん(\(note))"
             }
@@ -171,7 +254,7 @@ final class AppModel: ObservableObject {
         let iso = ISO8601DateFormatter()
         iso.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
         iso.timeZone = .current
-        var lines = ["hit_no,frame,time_s,tip_x_px,tip_y_px,x_mm,y_mm,note,wall_time,r_mm,theta_deg,segment,img_before,img_after"]
+        var lines = ["hit_no,frame,time_s,tip_x_px,tip_y_px,x_mm,y_mm,note,wall_time,r_mm,theta_deg,segment,img_before,img_after,round_no,score,board"]
         for h in hits {
             let tip = h.tipPx.map { [String(format: "%.1f", $0.x * 2), String(format: "%.1f", $0.y * 2)] } ?? ["", ""]
             // チップが隠れていた点は board.py と同じく座標を空にする(手で直したものは入れる)
@@ -183,18 +266,11 @@ final class AppModel: ObservableObject {
             let row = [String(h.no), String(Int((h.t * 30).rounded())), String(format: "%.3f", h.t)] + tip + xy
                 + [h.note, iso.string(from: h.wall)] + polar
                 + [String(format: "hit%03d_a.jpg", h.no), String(format: "hit%03d_b.jpg", h.no)]
+                + [String(h.round), mm.map { String(Board.score(x: $0.x, y: $0.y).points) } ?? "",
+                   "\"\(spec.name)\""]
             lines.append(row.joined(separator: ","))
         }
         try? (lines.joined(separator: "\n") + "\n").write(to: dir.appendingPathComponent("hits.csv"),
                                                           atomically: true, encoding: .utf8)
-    }
-
-    /// 着弾のばらつき(x, y の標準偏差 mm)
-    var spread: (sx: Double, sy: Double)? {
-        let pts = hits.compactMap { h -> SIMD2<Double>? in h.note == "tip_hidden" ? nil : h.mm }
-        guard pts.count >= 3 else { return nil }
-        let m = pts.reduce(SIMD2<Double>(0, 0), +) / Double(pts.count)
-        let v = pts.map { ($0 - m) * ($0 - m) }.reduce(SIMD2<Double>(0, 0), +) / Double(pts.count - 1)
-        return (v.x.squareRoot(), v.y.squareRoot())
     }
 }

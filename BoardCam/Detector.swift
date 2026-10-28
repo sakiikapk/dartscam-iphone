@@ -12,6 +12,7 @@ struct Hit: Identifiable {
     var note: String
     var before: RGBImage?
     var after: RGBImage?
+    var round = 1
 }
 
 /// 固定カメラの盤面から、ダーツが刺さった瞬間とチップ位置を取る。

@@ -1,38 +1,102 @@
 import Foundation
 import simd
 
-/// 盤面の寸法(DARTSLIVE Home, ダブル外周 Ø393.7mm)。比率は src/report.py と同じ
+/// 盤の寸法(mm、半径)。ソフトとハードで大きさもブルの分け方も違う
+struct BoardSpec: Codable, Hashable {
+    var name: String
+    var rDoubleOut: Double
+    var rDoubleIn: Double
+    var rTripleOut: Double
+    var rTripleIn: Double
+    var rBullOuter: Double
+    var rBullInner: Double
+    /// ブルを 50(インナー)/25(アウター)に分けるか。ソフトのファットブルなら false
+    var splitBull: Bool
+
+    /// ソフト(DARTSLIVE Home、ダブル外径 15.5インチ)。比率は darts-home の src/report.py と同じ
+    static func soft(diameter: Double = 393.7, name: String = "ソフト 15.5インチ(DARTSLIVE Home など)",
+                     splitBull: Bool = false) -> BoardSpec {
+        let r = diameter / 2
+        let tm = r * 0.59
+        return BoardSpec(name: name, rDoubleOut: r, rDoubleIn: r * 0.93, rTripleOut: tm + 5 * r / 196.85,
+                         rTripleIn: tm - 5 * r / 196.85, rBullOuter: r * 0.10, rBullInner: r * 0.035,
+                         splitBull: splitBull)
+    }
+
+    /// ハード(スティール)の公式寸法
+    static let hard = BoardSpec(name: "ハード(スティール公式、ダブル外径 340mm)", rDoubleOut: 170, rDoubleIn: 162,
+                                rTripleOut: 107, rTripleIn: 99, rBullOuter: 15.9, rBullInner: 6.35, splitBull: true)
+
+    var rTripleMid: Double { (rTripleIn + rTripleOut) / 2 }
+}
+
+/// 今の盤の設定と、盤まわりの計算(座標はブル中心が原点、+x が 6、+y が 20 の方向、mm)
 enum Board {
-    static let rDoubleOut = 393.7 / 2
-    static let rDoubleIn = rDoubleOut * 0.93
-    static let rTripleMid = rDoubleOut * 0.59
-    static let rTripleOut = rTripleMid + 5
-    static let rTripleIn = rTripleMid - 5
-    static let rBull = rDoubleOut * 0.10  // ファットブル
+    /// アプリで選んでいる盤(設定画面で変える)
+    static var spec: BoardSpec = .soft()
+
+    static var rDoubleOut: Double { spec.rDoubleOut }
+    static var rDoubleIn: Double { spec.rDoubleIn }
+    static var rTripleOut: Double { spec.rTripleOut }
+    static var rTripleIn: Double { spec.rTripleIn }
+    static var rBull: Double { spec.rBullOuter }
     /// 20 の真上から時計回り
     static let segments = [20, 1, 18, 4, 13, 6, 10, 15, 2, 17, 3, 19, 7, 16, 8, 11, 14, 9, 12, 5]
 
-    /// キャリブレーションでタップしてもらう点(mm)。座標はブル中心が原点、+x が 6、+y が 20 の方向
-    static let calibPoints: [(name: String, mm: SIMD2<Double>)] = [
-        ("ブルの中心", [0, 0]),
-        ("20 のダブルの外側のふち(真ん中)", [0, rDoubleOut]),
-        ("6 のダブルの外側のふち(真ん中)", [rDoubleOut, 0]),
-        ("3 のダブルの外側のふち(真ん中)", [0, -rDoubleOut]),
-        ("11 のダブルの外側のふち(真ん中)", [-rDoubleOut, 0]),
-    ]
+    /// キャリブレーションでタップしてもらう点(mm)
+    static var calibPoints: [(name: String, mm: SIMD2<Double>)] {
+        [
+            ("ブルの中心", [0, 0]),
+            ("20 のダブルの外側のふち(真ん中)", [0, rDoubleOut]),
+            ("6 のダブルの外側のふち(真ん中)", [rDoubleOut, 0]),
+            ("3 のダブルの外側のふち(真ん中)", [0, -rDoubleOut]),
+            ("11 のダブルの外側のふち(真ん中)", [-rDoubleOut, 0]),
+        ]
+    }
 
-    /// 着弾のラベル(例 T20, D6, S1, BULL, OUT)
-    static func label(x: Double, y: Double) -> String {
+    /// 数字 n の真ん中の向き(数学の角度、ラジアン。6 が 0、20 が π/2)
+    static func angle(of n: Int) -> Double {
+        let k = Double(segments.firstIndex(of: n) ?? 0)
+        return (90 - 18 * k) * .pi / 180
+    }
+
+    /// 着弾のラベルと点数(例 T20=60, D6=12, BULL=50, 25, OUT=0)
+    static func score(x: Double, y: Double) -> (label: String, points: Int) {
         let r = hypot(x, y)
-        if r <= rBull { return "BULL" }
-        if r > rDoubleOut { return "OUT" }
+        if spec.splitBull {
+            if r <= spec.rBullInner { return ("BULL", 50) }
+            if r <= spec.rBullOuter { return ("25", 25) }
+        } else if r <= spec.rBullOuter {
+            return ("BULL", 50)
+        }
+        if r > spec.rDoubleOut { return ("OUT", 0) }
         var ang = 90 - atan2(y, x) * 180 / .pi
         ang = ang.truncatingRemainder(dividingBy: 360)
         if ang < 0 { ang += 360 }
         let seg = segments[Int((ang + 9) / 18) % 20]
-        if r >= rTripleIn && r <= rTripleOut { return "T\(seg)" }
-        if r >= rDoubleIn { return "D\(seg)" }
-        return "S\(seg)"
+        if r >= spec.rTripleIn && r <= spec.rTripleOut { return ("T\(seg)", seg * 3) }
+        if r >= spec.rDoubleIn { return ("D\(seg)", seg * 2) }
+        return ("S\(seg)", seg)
+    }
+
+    static func label(x: Double, y: Double) -> String { score(x: x, y: y).label }
+}
+
+/// 狙っているところ。ずれや命中率をここ基準で出す
+enum Target: String, CaseIterable, Codable, Identifiable {
+    case bull = "BULL", t20 = "T20", t19 = "T19", t18 = "T18", t17 = "T17", t16 = "T16", t15 = "T15"
+
+    var id: String { rawValue }
+
+    var point: SIMD2<Double> {
+        guard self != .bull, let n = Int(rawValue.dropFirst()) else { return [0, 0] }
+        let a = Board.angle(of: n), r = Board.spec.rTripleMid
+        return [r * cos(a), r * sin(a)]
+    }
+
+    /// 命中とみなすラベル
+    func isHit(_ label: String) -> Bool {
+        self == .bull ? (label == "BULL" || label == "25") : label == rawValue
     }
 }
 
@@ -52,6 +116,11 @@ struct Calibration: Codable {
         self.imgW = imgW
         self.imgH = imgH
         self.tapsPx = tapsPx.map { [$0.x, $0.y] }
+    }
+
+    /// 同じタップ位置で、今の盤の寸法として解き直す(盤の種類を変えたとき)
+    func resolved() -> Calibration? {
+        Calibration(tapsPx: tapsPx.map { SIMD2($0[0], $0[1]) }, imgW: imgW, imgH: imgH)
     }
 
     func toMM(_ p: SIMD2<Double>) -> SIMD2<Double> { Mat.apply(mat, p) }

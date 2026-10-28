@@ -147,41 +147,61 @@ struct LiveView: View {
 
 struct SidePanel: View {
     @EnvironmentObject var model: AppModel
+    enum Sheet: Int, Identifiable {
+        case summary, history, settings
+        var id: Int { rawValue }
+    }
+    @State private var sheet: Sheet?
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text("BoardCam").font(.headline)
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Text("BoardCam").font(.headline)
+                Spacer()
+                Button { sheet = .history } label: { Image(systemName: "clock.arrow.circlepath") }
+                Button { sheet = .settings } label: { Image(systemName: "gearshape") }
+                    .disabled(model.mode == .recording)
+            }
             Text(model.status).font(.footnote).fixedSize(horizontal: false, vertical: true)
+            Text("\(model.spec.name)・狙い \(model.target.rawValue)").font(.caption2).foregroundStyle(.secondary)
             switch model.mode {
             case .live:
-                Button("キャリブレーション") { model.beginCalibration() }
-                    .buttonStyle(.bordered)
-                Button("記録スタート") { model.startSession() }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(model.cal == nil)
+                HStack {
+                    Button("キャリブレーション") { model.beginCalibration() }
+                        .buttonStyle(.bordered)
+                    Button("記録スタート") { model.startSession() }
+                        .buttonStyle(.borderedProminent)
+                        .disabled(model.cal == nil)
+                }
             case .recording:
-                Button("記録おわり") { model.stopSession() }
-                    .buttonStyle(.borderedProminent).tint(.red)
-                Button("最後の1本を消す") { model.undoLast() }
-                    .buttonStyle(.bordered)
-                    .disabled(model.hits.isEmpty)
+                HStack {
+                    Button("記録おわり") { model.stopSession() }
+                        .buttonStyle(.borderedProminent).tint(.red)
+                    Button("1本消す") { model.undoLast() }
+                        .buttonStyle(.bordered)
+                        .disabled(model.hits.isEmpty)
+                }
             case .calibrating:
                 EmptyView()
             }
             Divider()
-            Text("\(model.hits.count) 本").font(.title2.monospacedDigit())
-            if let s = model.spread {
-                Text(String(format: "σx %.0f mm / σy %.0f mm", s.sx, s.sy)).font(.footnote.monospacedDigit())
+            if let r = model.roundText {
+                Text(r).font(.title3.monospacedDigit().bold())
             }
-            ForEach(Array(model.hits.suffix(3).reversed())) { h in
-                if let mm = h.mm {
-                    Text(String(format: "#%d %@  %.0f mm", h.no, Board.label(x: mm.x, y: mm.y), simd_length(mm)))
-                        .font(.caption.monospacedDigit())
-                } else {
-                    Text("#\(h.no) \(h.note)").font(.caption)
+            let st = model.stats
+            Text("\(model.hits.count) 本").font(.headline.monospacedDigit())
+            if st.n >= 3 {
+                Text(String(format: "σ %.0f mm(x %.0f / y %.0f)", st.sigma, st.sx, st.sy))
+                Text(String(format: "1R平均 %.1f 点  %@率 %.0f%%", st.ppr, st.target.rawValue, st.hitRate * 100))
+                Text("平均のずれ: \(st.offsetText)")
+            }
+            if !model.hits.isEmpty {
+                Button {
+                    sheet = .summary
+                } label: {
+                    Label("まとめ(盤面の散らばり)", systemImage: "scope")
                 }
             }
-            Spacer()
             if let dir = model.sessionDir, model.mode == .live, !model.hits.isEmpty {
                 ShareLink(item: dir.appendingPathComponent("hits.csv")) {
                     Label("CSVを送る", systemImage: "square.and.arrow.up")
@@ -189,7 +209,15 @@ struct SidePanel: View {
             }
             Text("点はドラッグで直せる").font(.caption2).foregroundStyle(.secondary)
         }
+        .font(.footnote.monospacedDigit())
         .padding(12)
+        .sheet(item: $sheet) { s in
+            switch s {
+            case .summary: SummaryView(title: "今回のまとめ", stats: model.stats)
+            case .history: HistoryView().environmentObject(model)
+            case .settings: SettingsView().environmentObject(model)
+            }
+        }
     }
 }
 
@@ -224,7 +252,8 @@ enum BoardOverlay {
     /// キャリブレーション結果の盤面(リングと区切り線)を重ねる
     static func draw(_ c: Calibration, in ctx: inout GraphicsContext, fit: Fit, alpha: Double) {
         let col = Color.cyan.opacity(alpha)
-        for r in [Board.rBull, Board.rTripleIn, Board.rTripleOut, Board.rDoubleIn, Board.rDoubleOut] {
+        for r in [Board.rBull, Board.rTripleIn, Board.rTripleOut, Board.rDoubleIn, Board.rDoubleOut]
+            + (Board.spec.splitBull ? [Board.spec.rBullInner] : []) {
             var p = Path()
             for k in 0...96 {
                 let a = Double(k) * 2 * .pi / 96
