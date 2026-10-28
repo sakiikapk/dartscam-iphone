@@ -106,8 +106,20 @@ struct Calibration: Codable {
     var imgW: Int
     var imgH: Int
     var tapsPx: [[Double]]
+    /// "auto"(色で自動) / "manual"(5点タップ)
+    var source: String = "manual"
 
     var mat: simd_double3x3 { Mat.from(H) }
+
+    /// 自動キャリブレーションの結果から。tapsPx には盤上の5点を画像に戻した位置を入れておく(手動の初期位置用)
+    init?(H h: simd_double3x3, imgW: Int, imgH: Int, source: String) {
+        guard abs(h.determinant) > 1e-12 else { return nil }
+        H = Mat.toArray(h)
+        self.imgW = imgW
+        self.imgH = imgH
+        self.source = source
+        tapsPx = Board.calibPoints.map { Mat.apply(h.inverse, $0.mm) }.map { [$0.x, $0.y] }
+    }
 
     init?(tapsPx: [SIMD2<Double>], imgW: Int, imgH: Int) {
         let mm = Board.calibPoints.map(\.mm)

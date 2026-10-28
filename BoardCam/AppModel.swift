@@ -13,7 +13,7 @@ final class AppModel: ObservableObject {
     @Published var mode: Mode = .live
     @Published var cal: Calibration?
     @Published var hits: [Hit] = []
-    @Published var status = "盤面全体が写るように置いて、キャリブレーションしてね"
+    @Published var status = "盤全体が映るように置いて「自動キャリブレーション」"
     @Published var sessionDir: URL?
     /// キャリブレーション用に止めた1枚
     @Published var frozen: RGBImage?
@@ -48,7 +48,7 @@ final class AppModel: ObservableObject {
         if let data = UserDefaults.standard.data(forKey: "calibration"),
            let c = try? JSONDecoder().decode(Calibration.self, from: data) {
             cal = c
-            status = "前回のキャリブレーションを読み込んだ。カメラが動いてたらやり直してね"
+            status = "前回のキャリブレーションを読み込んだ。「自動キャリブレーション」で合わせ直せる"
         }
     }
 
@@ -128,6 +128,31 @@ final class AppModel: ObservableObject {
 
     // MARK: - キャリブレーション
 
+    /// 盤の色で自動キャリブレーション。終わったら completion(成功したか)
+    func autoCalibrate(quiet: Bool = false, completion: ((Bool) -> Void)? = nil) {
+        guard let f = lastFrame else { completion?(false); return }
+        if !quiet { status = "盤を探してる…" }
+        Task.detached(priority: .userInitiated) {
+            let r = AutoCalib.calibrate(f)
+            await MainActor.run {
+                if let r, r.rmsPx < 3 {
+                    self.cal = r.cal
+                    if let data = try? JSONEncoder().encode(r.cal) { UserDefaults.standard.set(data, forKey: "calibration") }
+                    if !quiet {
+                        self.status = String(format: "自動キャリブレーションOK(マス%d個、誤差 %.1fpx、%.1f px/mm)%@", r.nCells, r.rmsPx,
+                                             r.cal.pxPerMM, r.upMarginDeg < 15 ? " ※20の向きが際どい、水色の20の位置を確認" : "")
+                    }
+                    completion?(true)
+                } else {
+                    if !quiet {
+                        self.status = "盤が見つからへん。盤全体が明るく映ってるか確認して、無理なら手動(5点タップ)で"
+                    }
+                    completion?(false)
+                }
+            }
+        }
+    }
+
     func beginCalibration() {
         guard let f = lastFrame else { return }
         camera.lockExposure(false)
@@ -154,7 +179,14 @@ final class AppModel: ObservableObject {
 
     // MARK: - 記録
 
+    /// 記録スタート。置き直してずれてても困らんように、まず自動で合わせ直してから始める
     func startSession() {
+        guard cal != nil else { return }
+        status = "盤を合わせてる…"
+        autoCalibrate(quiet: true) { _ in self.beginRecording() }
+    }
+
+    private func beginRecording() {
         guard let c = cal, let f = lastFrame else { return }
         camera.lockExposure(true)
         let fmt = DateFormatter()
@@ -206,6 +238,25 @@ final class AppModel: ObservableObject {
         writeCSV()
     }
 
+    /// ダーツを抜いて盤がきれいなとき、自動キャリブをやり直してカメラのずれに追従する(board.py と同じ)
+    private func refollow() {
+        guard let f = lastFrame, let old = cal, mode == .recording else { return }
+        Task.detached(priority: .utility) {
+            let r = AutoCalib.calibrate(f)
+            await MainActor.run {
+                guard self.mode == .recording, let r, r.rmsPx < 3 else { return }
+                let moved = simd_length(r.cal.toPx([0, 0]) - old.toPx([0, 0]))
+                guard moved > 3 else { return }
+                self.cal = r.cal
+                self.detector = Detector(cal: r.cal)
+                self.status = String(format: "カメラが %.0fpx ずれてたので合わせ直した", moved)
+                if let dir = self.sessionDir {
+                    try? JSONEncoder().encode(r.cal).write(to: dir.appendingPathComponent("calibration.json"))
+                }
+            }
+        }
+    }
+
     private func handle(_ r: Detector.Result, start: Date) {
         switch r {
         case .reset:
@@ -214,6 +265,7 @@ final class AppModel: ObservableObject {
                 inRound = 0
             }
             status = "ダーツを抜いた(\(hits.count)本目まで記録)"
+            refollow()
         case let .hit(t, tip, note, before, after):
             guard let c = cal else { return }
             let no = hits.count + 1

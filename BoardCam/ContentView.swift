@@ -167,12 +167,14 @@ struct SidePanel: View {
             switch model.mode {
             case .live:
                 HStack {
-                    Button("キャリブレーション") { model.beginCalibration() }
+                    Button("自動キャリブレーション") { model.autoCalibrate() }
                         .buttonStyle(.bordered)
                     Button("記録スタート") { model.startSession() }
                         .buttonStyle(.borderedProminent)
                         .disabled(model.cal == nil)
                 }
+                Button("うまくいかんときは手動(5点タップ)") { model.beginCalibration() }
+                    .font(.caption)
             case .recording:
                 HStack {
                     Button("記録おわり") { model.stopSession() }
