@@ -25,6 +25,8 @@ final class AppModel: ObservableObject {
     @Published var spec: BoardSpec = .soft()
     @Published var target: Target = .bull
     @Published var sound = true
+    /// デジタルズーム(ピンチかスライダー)
+    @Published var zoom = 1.0
     private var round = 1
     private var inRound = 0
 
@@ -44,6 +46,8 @@ final class AppModel: ObservableObject {
         }
         target = Target(rawValue: ud.string(forKey: "target") ?? "") ?? .bull
         sound = ud.object(forKey: "sound") as? Bool ?? true
+        zoom = ud.object(forKey: "zoom") as? Double ?? 1
+        camera.setZoom(zoom)
         camera.onFrame = { [weak self] img, wall in self?.onFrame(img, wall) }
         camera.start()
         if let data = UserDefaults.standard.data(forKey: "calibration"),
@@ -100,6 +104,12 @@ final class AppModel: ObservableObject {
         UserDefaults.standard.set(t.rawValue, forKey: "target")
     }
 
+    func setZoom(_ z: Double) {
+        zoom = min(max(z, 1), 5)
+        camera.setZoom(zoom)
+        UserDefaults.standard.set(zoom, forKey: "zoom")
+    }
+
     func setSound(_ on: Bool) {
         sound = on
         UserDefaults.standard.set(on, forKey: "sound")
@@ -153,7 +163,8 @@ final class AppModel: ObservableObject {
         Task.detached(priority: .userInitiated) {
             let r = AutoCalib.calibrate(f, up: up, hint20Px: hint)
             await MainActor.run {
-                if let r, r.rmsPx < 3 {
+                if var r, r.rmsPx < 3 {
+                    r.cal.zoom = self.zoom
                     self.cal = r.cal
                     if let data = try? JSONEncoder().encode(r.cal) { UserDefaults.standard.set(data, forKey: "calibration") }
                     if !quiet {
@@ -179,10 +190,11 @@ final class AppModel: ObservableObject {
     }
 
     func finishCalibration(taps: [SIMD2<Double>]) {
-        guard let f = frozen, let c = Calibration(tapsPx: taps, imgW: f.w, imgH: f.h) else {
+        guard let f = frozen, var c = Calibration(tapsPx: taps, imgW: f.w, imgH: f.h) else {
             status = "キャリブレーションに失敗。点を打ち直してね"
             return
         }
+        c.zoom = zoom
         cal = c
         if let data = try? JSONEncoder().encode(c) { UserDefaults.standard.set(data, forKey: "calibration") }
         frozen = nil
@@ -264,7 +276,8 @@ final class AppModel: ObservableObject {
         Task.detached(priority: .utility) {
             let r = AutoCalib.calibrate(f, up: up, hint20Px: hint)
             await MainActor.run {
-                guard self.mode == .recording, let r, r.rmsPx < 3 else { return }
+                guard self.mode == .recording, var r, r.rmsPx < 3 else { return }
+                r.cal.zoom = self.zoom
                 let moved = simd_length(r.cal.toPx([0, 0]) - old.toPx([0, 0]))
                 guard moved > 3 else { return }
                 self.cal = r.cal

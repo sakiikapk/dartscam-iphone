@@ -131,6 +131,7 @@ struct LiveView: View {
     @EnvironmentObject var model: AppModel
     @State private var dragging: UUID?
     @State private var dragPos: CGPoint?
+    @State private var pinchBase = 1.0
 
     var body: some View {
         GeometryReader { geo in
@@ -159,6 +160,12 @@ struct LiveView: View {
                     }
                 }
                 .contentShape(Rectangle())
+                .simultaneousGesture(MagnifyGesture()
+                    .onChanged { v in
+                        if model.mode != .recording { model.setZoom(pinchBase * v.magnification) }
+                    }
+                    .onEnded { _ in pinchBase = model.zoom })
+                .onAppear { pinchBase = model.zoom }
                 .onTapGesture { loc in
                     // 「20 はここ」待ちのときは、タップした所を 20 の向きとして合わせ直す
                     if model.picking20 {
@@ -219,6 +226,12 @@ struct SidePanel: View {
                         .disabled(model.cal == nil)
                 }
                 .controlSize(.large)
+                HStack {
+                    Image(systemName: "minus.magnifyingglass")
+                    Slider(value: Binding(get: { model.zoom }, set: { model.setZoom($0) }), in: 1...5)
+                    Text(String(format: "%.1fx", model.zoom)).frame(width: 40)
+                }
+                Text("盤が画面の半分以上になるまでズーム(ピンチでもOK)").font(.caption2).foregroundStyle(.secondary)
                 HStack {
                     Button(model.picking20 ? "画面の 20 を押して…" : "20がずれてる") { model.picking20.toggle() }
                         .buttonStyle(.bordered)

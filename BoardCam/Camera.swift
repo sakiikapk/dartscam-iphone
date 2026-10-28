@@ -6,6 +6,8 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
     let session = AVCaptureSession()
     private let queue = DispatchQueue(label: "camera.frames")
     private var device: AVCaptureDevice?
+    /// 起動前に setZoom されたら、カメラが立ち上がってから効かせる
+    var pendingZoom = 1.0
     /// (縮小画像, 撮影時刻)。カメラ用のキューで呼ばれる
     var onFrame: ((RGBImage, Date) -> Void)?
 
@@ -40,10 +42,23 @@ final class Camera: NSObject, AVCaptureVideoDataOutputSampleBufferDelegate {
         dev.unlockForConfiguration()
         device = dev
         session.commitConfiguration()
+        if pendingZoom > 1 { setZoom(pendingZoom) }
         session.startRunning()
     }
 
     func stop() { queue.async { self.session.stopRunning() } }
+
+    /// デジタルズーム(1〜5倍)。センサーの画素が余っているので 2〜3倍までは画質がほぼ落ちない。
+    /// 遠く・斜めから盤を撮るとき、盤を画面いっぱいにするために使う
+    func setZoom(_ factor: Double) {
+        pendingZoom = factor
+        queue.async {
+            guard let dev = self.device, (try? dev.lockForConfiguration()) != nil else { return }
+            let z = min(max(factor, 1), min(5, dev.activeFormat.videoMaxZoomFactor))
+            dev.videoZoomFactor = z
+            dev.unlockForConfiguration()
+        }
+    }
 
     /// キャリブレーション後は露出・ピント・ホワイトバランスを固定する(差分が明るさの揺れを拾わないように)
     func lockExposure(_ lock: Bool) {

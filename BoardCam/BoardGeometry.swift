@@ -108,6 +108,8 @@ struct Calibration: Codable {
     var tapsPx: [[Double]]
     /// "auto"(色で自動) / "manual"(5点タップ)
     var source: String = "manual"
+    /// 撮ったときのデジタルズーム(焦点距離がこの倍になる)
+    var zoom: Double = 1
 
     var mat: simd_double3x3 { Mat.from(H) }
 
@@ -156,7 +158,7 @@ struct Calibration: Codable {
     /// src/board.py の Calibration.dart_vec と同じ考え方(焦点距離は長辺の 0.8 倍と仮定)。
     func dartVec(_ px: SIMD2<Double>, lengthMM: Double = 100) -> SIMD2<Double> {
         let w = Double(imgW), h = Double(imgH)
-        let f = 0.8 * max(w, h)
+        let f = 0.8 * max(w, h) * zoom
         let K = simd_double3x3(rows: [[f, 0, w / 2], [0, f, h / 2], [0, 0, 1]])
         let G = K.inverse * mat.inverse  // 盤面mm → 正規化カメラ座標
         let lam = 1 / simd_length(G.columns.0)
