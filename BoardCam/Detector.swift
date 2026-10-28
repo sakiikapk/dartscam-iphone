@@ -36,6 +36,8 @@ final class Detector {
     private var eventBefore: RGBImage?
     private var lastActive = 0.0
     private(set) var dartsOnBoard = 0
+    /// 今刺さっているダーツのチップ(処理画像の px)。抜いたのを見分けるのに使う
+    private var onBoard: [SIMD2<Double>] = []
     private let settle = 0.3  // 刺さった後の揺れが収まるまで(秒)
 
     init(cal: Calibration) {
@@ -61,7 +63,10 @@ final class Detector {
         roiMask = mask
     }
 
-    func resetCount() { dartsOnBoard = 0 }
+    func resetCount() {
+        dartsOnBoard = 0
+        onBoard = []
+    }
 
     /// 1フレームずつ渡す。着弾やリセットが確定したらそれを返す。
     func process(_ img: RGBImage, t: Double) -> Result? {
@@ -95,16 +100,41 @@ final class Detector {
         lastQuiet = img
         let (count, diff) = changed(before, img)
         if count < dartArea * 0.04 { return nil }  // 露出の揺れ、影だけ
-        if count > dartArea * 3 || lastActive - start > 2.0 || dartsOnBoard >= 6 {
-            dartsOnBoard = 0
+        // 何本目でも、刺さっているダーツが消えていたら「抜いた」(1〜2本で抜いたときも区切る)
+        if count > dartArea * 3 || lastActive - start > 2.0 || dartsOnBoard >= 6 || removedDart(diff) {
+            resetCount()
             return .reset
         }
         dartsOnBoard += 1
         let off = SIMD2<Double>(Double(roi.x0), Double(roi.y0))
         if let r = findTip(diff, off: off) {
+            onBoard.append(r.0 + off)
             return .hit(t: start, tip: r.0 + off, note: r.1, before: before, after: img)
         }
         return .hit(t: start, tip: nil, note: "no_dart_found", before: before, after: img)
+    }
+
+    /// 刺さっていたダーツのどれかが、チップからフライト側へほぼ全部変わっていたら「抜いた」とみなす。
+    /// 近くに新しいダーツが刺さっただけなら、前のダーツの軸が全部変わることはまずない
+    private func removedDart(_ diff: [Float]) -> Bool {
+        let W = roi.w, Hh = roi.h
+        func changedNear(_ p: SIMD2<Double>) -> Bool {
+            let x0 = Int(p.x) - roi.x0, y0 = Int(p.y) - roi.y0
+            for dy in -1...1 {
+                for dx in -1...1 {
+                    let x = x0 + dx, y = y0 + dy
+                    if x >= 0, y >= 0, x < W, y < Hh, diff[y * W + x] > 40 { return true }
+                }
+            }
+            return false
+        }
+        for tip in onBoard {
+            let v = cal.dartVec(tip, lengthMM: 80)
+            let n = 12
+            let hit = (1...n).filter { changedNear(tip + v * (Double($0) / Double(n))) }.count
+            if Double(hit) / Double(n) >= 0.7 { return true }
+        }
+        return false
     }
 
     private func quietLevel() -> Float {
