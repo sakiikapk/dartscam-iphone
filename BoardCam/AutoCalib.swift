@@ -36,15 +36,41 @@ enum AutoCalib {
         var cells = pickBoardCells(findCells(img), img: img)
         guard cells.count >= 10, let bull = findBull(cells) else { return nil }
         labelRings(&cells, bull: bull)
-        let ringIdx = cells.indices.filter { cells[$0].ring == "double" || cells[$0].ring == "treble" }
-        guard ringIdx.filter({ cells[$0].ring == "double" }).count >= 5 else { return nil }
+        var ringIdx = cells.indices.filter { cells[$0].ring == "double" || cells[$0].ring == "treble" }
 
-        // 1) ダブルの重心にブル中心の楕円を当て、円に戻してから各マスの角度を出す
+        // 1) ダブルの重心にブル中心の楕円を当て、円に戻してから各マスの角度を出す。
+        //    盤の外の青(カーテンなど)がダブル扱いで混ざると楕円が崩れるので、4個ずつ選んで楕円を作り、
+        //    いちばん多くのダブルが乗るものを採る(RANSAC)。そのあと楕円上の距離でダブル/トリプルを付け直す
         let c0 = cells[bull].xy
-        let dbl = ringIdx.filter { cells[$0].ring == "double" }.map { cells[$0].xy - c0 }
-        guard let ell = centeredEllipse(dbl) else { return nil }
-        let (ea, eb, th) = ell
-        let rot = simd_double2x2(rows: [[cos(th), sin(th)], [-sin(th), cos(th)]])
+        var ea = 0.0, eb = 0.0, th = 0.0
+        var rot = simd_double2x2(1)
+        func setEllipse(_ e: (Double, Double, Double)) {
+            (ea, eb, th) = e
+            rot = simd_double2x2(rows: [[cos(th), sin(th)], [-sin(th), cos(th)]])
+        }
+        func rho(_ i: Int) -> Double {
+            let p = rot * (cells[i].xy - c0)
+            return hypot(p.x / ea, p.y / eb)
+        }
+        let dblAll = ringIdx.filter { cells[$0].ring == "double" }
+        guard dblAll.count >= 5 else { return nil }
+        var best: [Int] = []
+        for _ in 0..<300 {
+            var pick = Set<Int>()
+            while pick.count < 4 { pick.insert(dblAll.randomElement()!) }
+            guard let e = centeredEllipse(pick.map { cells[$0].xy - c0 }), e.0 < 4 * e.1, e.1 < 4 * e.0 else { continue }
+            setEllipse(e)
+            let inl = dblAll.filter { abs(rho($0) - 1) < 0.12 }
+            if inl.count > best.count { best = inl }
+        }
+        guard best.count >= 5, let ell = centeredEllipse(best.map { cells[$0].xy - c0 }) else { return nil }
+        setEllipse(ell)
+        let tRatio = Board.spec.rTripleMid / ((Board.spec.rDoubleIn + Board.spec.rDoubleOut) / 2)
+        for i in cells.indices where i != bull {
+            let r = rho(i)
+            cells[i].ring = abs(r - 1) < 0.13 ? "double" : abs(r - tRatio) < 0.13 ? "treble" : "out"
+        }
+        ringIdx = cells.indices.filter { cells[$0].ring == "double" || cells[$0].ring == "treble" }
         for i in ringIdx {
             var p = rot * (cells[i].xy - c0)
             p = [p.x / ea, p.y / eb]
