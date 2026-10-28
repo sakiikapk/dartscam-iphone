@@ -15,8 +15,9 @@ struct RGBImage {
         let sw = CVPixelBufferGetWidth(buf), sh = CVPixelBufferGetHeight(buf)
         let stride = CVPixelBufferGetBytesPerRow(buf)
         let base = CVPixelBufferGetBaseAddress(buf)!.assumingMemoryBound(to: UInt8.self)
-        w = sw / 2
-        h = sh / 2
+        let w = sw / 2, h = sh / 2
+        self.w = w
+        self.h = h
         var out = [UInt8](repeating: 0, count: w * h * 3)
         out.withUnsafeMutableBufferPointer { o in
             for y in 0..<h {

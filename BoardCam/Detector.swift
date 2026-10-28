@@ -123,7 +123,8 @@ final class Detector {
             for y in stride(from: roi.y0, to: roi.y0 + roi.h, by: 4) {
                 for x in stride(from: roi.x0, to: roi.x0 + roi.w, by: 4) {
                     let i = (y * img.w + x) * 3
-                    out.append(Int16((Int(p[i]) + 2 * Int(p[i + 1]) + Int(p[i + 2])) >> 2))
+                    let r = Int(p[i]), g = Int(p[i + 1]), b = Int(p[i + 2])
+                    out.append(Int16((r + 2 * g + b) >> 2))
                 }
             }
         }
